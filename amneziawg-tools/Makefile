@@ -9,18 +9,18 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=amneziawg-tools
-PKG_VERSION:=1.0.20241018
-PKG_RELEASE:=$(AUTORELEASE)
 
-PKG_SOURCE:=v$(PKG_VERSION).tar.gz
-PKG_SOURCE_URL:=https://github.com/amnezia-vpn/amneziawg-tools/archive/refs/tags/
-PKG_HASH:=60f1cec1774fb871a2d8dc24e4f731625516d90f663d6e0d2c77d9247222f2f9
+PKG_VERSION:=1.0.20250706
+PKG_RELEASE:=1
 
-PKG_MAINTAINER:=Amnezia Admin <admin@amnezia.org>
-PKG_LICENSE:=GPL-2.0
+PKG_SOURCE_PROTO:=git
+PKG_SOURCE_URL:=https://github.com/amnezia-vpn/amneziawg-tools.git
+PKG_MIRROR_HASH:=b5ebcfd260ed578420002aa60ec95326558cead64ebc4ab655888ff4b75687a1
+PKG_SOURCE_VERSION:=2b593ee0860e2ecc7cfcbfab4261194256329048
+
+PKG_MAINTAINER:=Gregory Gullin <garuwex@gmail.com>
+PKG_LICENSE:=GPL-2.0-only
 PKG_LICENSE_FILES:=COPYING
-
-PKG_BUILD_DIR=$(BUILD_DIR)/$(PKG_NAME)-$(PKG_VERSION)
 
 include $(INCLUDE_DIR)/package.mk
 
@@ -32,14 +32,12 @@ define Package/amneziawg-tools
   CATEGORY:=Network
   SUBMENU:=VPN
   URL:=https://amnezia.org/
-  MAINTAINER:=Amnezia Admin <admin@amnezia.org>
-  TITLE:=AmneziaWG userspace control program (amneziawg)
+  TITLE:=AmneziaWG userspace control program
+
   DEPENDS:= \
 	  +!BUSYBOX_CONFIG_IP:ip \
 	  +!BUSYBOX_CONFIG_FEATURE_IP_LINK:ip \
-	  +kmod-amneziawg \
-	  +ip-full \
-	  +ip-tiny
+	  +kmod-amneziawg
 endef
 
 define Package/amneziawg-tools/description
