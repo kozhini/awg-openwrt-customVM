@@ -3,13 +3,14 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=amneziawg-go
-PKG_VERSION:=0.2.12
-PKG_RELEASE:=$(AUTORELEASE)
+PKG_VERSION:=0.2.13
+PKG_RELEASE:=1
 
 PKG_SOURCE:=$(PKG_NAME)-$(PKG_VERSION).tar.gz
-PKG_SOURCE_URL:=https://github.com/amnezia-vpn/amneziawg-go/archive/refs/tags/v${PKG_VERSION}
-PKG_HASH:=df6a9bbd2321e801d67ea2ea94c355a8c6d07477b083ed7f3de215254aed2882
+PKG_SOURCE_URL:=https://codeload.github.com/amnezia-vpn/amneziawg-go/tar.gz/v$(PKG_VERSION)?
+PKG_HASH:=1ccebce252284f8f9a2208edfa97a73ea50480a276097f902fb2f2542b099176
 
+PKG_MAINTAINER:=Gregory Gullin <garuwex@gmail.com>
 PKG_LICENSE:=MIT
 PKG_LICENSE_FILES:=LICENSE
 
@@ -22,7 +23,7 @@ GO_PKG_LDFLAGS_X:=\
 	main.Build=$(PKG_VERSION)
 
 include $(INCLUDE_DIR)/package.mk
-include ../../packages/lang/golang/golang-package.mk
+include ../../lang/golang/golang-package.mk
 
 define Package/amneziawg-go
   SECTION:=net
