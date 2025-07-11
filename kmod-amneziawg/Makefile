@@ -5,7 +5,6 @@ include $(INCLUDE_DIR)/kernel.mk
 PKG_NAME:=kmod-amneziawg
 
 PKG_RELEASE:=1
-WIREGUARD_VERSION:=1.0.0
 
 PKG_SOURCE_PROTO:=git
 PKG_SOURCE_URL:=https://github.com/amnezia-vpn/amneziawg-linux-kernel-module.git
@@ -40,7 +39,7 @@ endef
 
 define Build/Compile
 	$(MAKE_VARS) $(MAKE) $(PKG_JOBS) -C $(PKG_BUILD_DIR)/$(MAKE_PATH) $(MAKE_FLAGS) apply-patches
-	$(MAKE_VARS) $(MAKE) -C "$(LINUX_DIR)" $(KERNEL_MAKE_FLAGS) M="$(PKG_BUILD_DIR)/$(MAKE_PATH)/generated" EXTRA_CFLAGS="$(BUILDFLAGS)" WIREGUARD_VERSION="$(WIREGUARD_VERSION)" modules
+	$(MAKE_VARS) $(MAKE) -C "$(LINUX_DIR)" $(KERNEL_MAKE_FLAGS) M="$(PKG_BUILD_DIR)/$(MAKE_PATH)/generated" EXTRA_CFLAGS="$(BUILDFLAGS)" modules
 endef
 
 $(eval $(call KernelPackage,amneziawg))
