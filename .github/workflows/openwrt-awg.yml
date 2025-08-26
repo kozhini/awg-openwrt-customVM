@@ -12,11 +12,13 @@ jobs:
     #runs-on: ubuntu-latest
     strategy:
       matrix:
-        tag: ['24.10.1']
+        tag: ['24.10.2']
         build_env:
           - pkgarch: aarch64_cortex-a53
             target: mediatek
             subtarget: filogic
+            # Добавляем параметр для vermagic
+            vermagic: "6.6.93~2ccac7a75355327cb6dfb4df1ecb575e"  # Замените на нужный vermagic
     steps:
       - uses: actions/checkout@v4
         with:
@@ -45,6 +47,72 @@ jobs:
 
           make defconfig
 
+      - name: Configure custom vermagic
+        run: |
+          vermagic="${{ matrix.build_env.vermagic }}"
+          echo "Setting custom vermagic: ${vermagic}"
+          
+          # Модифицируем конфигурацию ядра для установки кастомного vermagic
+          if [ ! -z "$vermagic" ]; then
+            # Находим и модифицируем target/linux/mediatek/filogic/config-default
+            # или соответствующий конфиг для вашей платформы
+            config_file="target/linux/${{ matrix.build_env.target }}/${{ matrix.build_env.subtarget }}/config-default"
+            
+            if [ -f "$config_file" ]; then
+              # Удаляем существующую строку CONFIG_LOCALVERSION если есть
+              sed -i '/^CONFIG_LOCALVERSION/d' "$config_file"
+              # Добавляем новую строку с кастомным vermagic
+              echo "CONFIG_LOCALVERSION=\"-${vermagic##*-}\"" >> "$config_file"
+            fi
+            
+            # Также добавляем в .config
+            sed -i '/^CONFIG_LOCALVERSION/d' .config
+            echo "CONFIG_LOCALVERSION=\"-${vermagic##*-}\"" >> .config
+            
+            # Устанавливаем переменную окружения для использования в Makefile
+            echo "KERNEL_VERMAGIC=${vermagic}" >> $GITHUB_ENV
+          fi
+
+      - name: Patch kernel Makefile for vermagic
+        run: |
+          vermagic="${{ matrix.build_env.vermagic }}"
+          
+          if [ ! -z "$vermagic" ]; then
+            # Создаем патч для принудительной установки vermagic
+            cat > vermagic_patch.sh << 'EOF'
+#!/bin/bash
+VERMAGIC="$1"
+KERNEL_DIR="$2"
+
+if [ ! -z "$VERMAGIC" ] && [ -d "$KERNEL_DIR" ]; then
+    # Находим и модифицируем файлы, отвечающие за vermagic
+    find "$KERNEL_DIR" -name "Makefile" -path "*/linux-*" | while read makefile; do
+        if grep -q "KERNELRELEASE" "$makefile"; then
+            echo "Patching $makefile for vermagic: $VERMAGIC"
+            # Создаем бэкап
+            cp "$makefile" "$makefile.orig"
+            # Модифицируем EXTRAVERSION
+            sed -i "s/^EXTRAVERSION.*/EXTRAVERSION = -${VERMAGIC##*-}/" "$makefile"
+        fi
+    done
+    
+    # Также пытаемся модифицировать version.h если он существует
+    find "$KERNEL_DIR" -name "version.h" | while read version_h; do
+        if [ -w "$version_h" ]; then
+            echo "Patching $version_h"
+            sed -i "s/#define UTS_RELEASE.*/#define UTS_RELEASE \"$VERMAGIC\"/" "$version_h"
+        fi
+    done
+fi
+EOF
+            chmod +x vermagic_patch.sh
+            
+            # Применяем патч ко всем найденным kernel директориям
+            find build_dir/target-* -name "linux-*" -type d 2>/dev/null | while read kernel_dir; do
+                ./vermagic_patch.sh "$vermagic" "$kernel_dir"
+            done
+          fi
+
       - name: Make Download and World OpenWRT_v${{ matrix.tag }} ${{ matrix.build_env.target}}/${{ matrix.build_env.subtarget}}
         run: |
           export FORCE_UNSAFE_CONFIGURE=1
@@ -67,17 +135,109 @@ jobs:
           echo "Make Kernel Compile"
           make target/linux/compile -i -j $(nproc)
 
+      - name: Apply vermagic to compiled kernel modules
+        run: |
+          vermagic="${{ matrix.build_env.vermagic }}"
+          
+          if [ ! -z "$vermagic" ]; then
+            echo "Post-processing kernel modules for vermagic: $vermagic"
+            
+            # Находим все скомпилированные .ko файлы
+            find build_dir -name "*.ko" | while read ko_file; do
+              if [ -f "$ko_file" ]; then
+                echo "Processing: $ko_file"
+                # Используем modinfo для проверки текущего vermagic
+                current_vermagic=$(modinfo "$ko_file" 2>/dev/null | grep "^vermagic:" | cut -d: -f2 | xargs)
+                echo "Current vermagic: $current_vermagic"
+                echo "Target vermagic: $vermagic"
+                
+                # Если vermagic отличается, пытаемся его изменить
+                if [ "$current_vermagic" != "$vermagic" ]; then
+                  # Создаем временную директорию для модификации
+                  temp_dir=$(mktemp -d)
+                  cp "$ko_file" "$temp_dir/"
+                  ko_basename=$(basename "$ko_file")
+                  
+                  # Пытаемся изменить vermagic в бинарном файле
+                  if command -v hexdump >/dev/null 2>&1 && command -v xxd >/dev/null 2>&1; then
+                    # Простая замена строки vermagic (работает не всегда)
+                    if [ ${#current_vermagic} -eq ${#vermagic} ]; then
+                      sed -i "s/$current_vermagic/$vermagic/g" "$temp_dir/$ko_basename" 2>/dev/null || true
+                      cp "$temp_dir/$ko_basename" "$ko_file"
+                      echo "Attempted vermagic replacement in $ko_file"
+                    fi
+                  fi
+                  
+                  rm -rf "$temp_dir"
+                fi
+              fi
+            done
+          fi
+
       - name: Make ipks amnezia_${{ github.ref_name }} for original OpenWRT_v${{ matrix.tag }} ${{ matrix.build_env.target}}/${{ matrix.build_env.subtarget}}
         run: |
+          vermagic="${{ matrix.build_env.vermagic }}"
+          
+          # Устанавливаем переменные окружения для сборки с кастомным vermagic
+          if [ ! -z "$vermagic" ]; then
+            export KERNEL_VERMAGIC="$vermagic"
+            export KERNELRELEASE="$vermagic"
+          fi
+          
           make -j1 V=sc package/amneziawg-tools/{clean,download,prepare,compile}
           make -j1 V=sc package/kmod-amneziawg/{clean,download,prepare,compile}
           make -j1 V=sc package/luci-proto-amneziawg/{clean,download,prepare,compile}
 
+      - name: Verify vermagic in built packages
+        run: |
+          vermagic="${{ matrix.build_env.vermagic }}"
+          
+          echo "Verifying built packages..."
+          
+          # Проверяем .ipk файлы
+          find bin/ -name "*.ipk" | while read ipk_file; do
+            echo "Checking: $ipk_file"
+            
+            # Распаковываем .ipk для проверки
+            temp_dir=$(mktemp -d)
+            cd "$temp_dir"
+            ar x "$OLDPWD/$ipk_file" 2>/dev/null || true
+            
+            if [ -f "data.tar.gz" ]; then
+              tar -xzf data.tar.gz 2>/dev/null || true
+              
+              # Ищем .ko файлы в распакованном пакете
+              find . -name "*.ko" | while read ko_module; do
+                if [ -f "$ko_module" ]; then
+                  module_vermagic=$(modinfo "$ko_module" 2>/dev/null | grep "^vermagic:" | cut -d: -f2 | xargs)
+                  echo "Module: $ko_module, vermagic: $module_vermagic"
+                  
+                  if [ ! -z "$vermagic" ] && [ "$module_vermagic" != "$vermagic" ]; then
+                    echo "WARNING: Module $ko_module has vermagic '$module_vermagic', expected '$vermagic'"
+                  fi
+                fi
+              done
+            fi
+            
+            cd "$OLDPWD"
+            rm -rf "$temp_dir"
+          done
+
       - name: Prepare artifacts OpenWRT_v${{ matrix.tag }} ${{ matrix.build_env.target}}/${{ matrix.build_env.subtarget}}
         run: |
           tag_name=${{ github.ref_name }}
+          vermagic="${{ matrix.build_env.vermagic }}"
+          
           mkdir -p awgrelease
-          postfix="${tag_name}_v${{ matrix.tag }}_${{ matrix.build_env.pkgarch}}_${{ matrix.build_env.target}}_${{ matrix.build_env.subtarget}}"
+          
+          # Добавляем vermagic в имя файлов если он задан
+          if [ ! -z "$vermagic" ]; then
+            vermagic_short="${vermagic%%-*}"  # Берем только версию ядра
+            postfix="${tag_name}_v${{ matrix.tag }}_${{ matrix.build_env.pkgarch}}_${{ matrix.build_env.target}}_${{ matrix.build_env.subtarget}}_${vermagic_short}"
+          else
+            postfix="${tag_name}_v${{ matrix.tag }}_${{ matrix.build_env.pkgarch}}_${{ matrix.build_env.target}}_${{ matrix.build_env.subtarget}}"
+          fi
+          
           cp bin/packages/${{ matrix.build_env.pkgarch }}/awgopenwrt/amneziawg-tools_*.ipk awgrelease/amneziawg-tools_${postfix}.ipk
           cp bin/targets/${{ matrix.build_env.target}}/${{ matrix.build_env.subtarget}}/packages/kmod-amneziawg_*.ipk awgrelease/kmod-amneziawg_${postfix}.ipk
           cp bin/packages/${{ matrix.build_env.pkgarch }}/awgopenwrt/luci-proto-amneziawg_*.ipk awgrelease/luci-proto-amneziawg_${postfix}.ipk
@@ -91,3 +251,4 @@ jobs:
         run: |
           rm feeds.conf || true
           rm -rf awgrelease || true
+          rm -f vermagic_patch.sh || true
