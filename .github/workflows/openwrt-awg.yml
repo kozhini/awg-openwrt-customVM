@@ -12,7 +12,7 @@ jobs:
     #runs-on: ubuntu-latest
     strategy:
       matrix:
-        tag: ['24.10.2']
+        tag: ['24.10.3']
         build_env:
           - pkgarch: aarch64_cortex-a53
             target: mediatek
@@ -79,32 +79,32 @@ jobs:
           
           if [ ! -z "$vermagic" ]; then
             # Создаем патч для принудительной установки vermagic
-            cat > vermagic_patch.sh << 'EOF'
-#!/bin/bash
-VERMAGIC="$1"
-KERNEL_DIR="$2"
+            cat > vermagic_patch.sh << 'EOFSCRIPT'
+          #!/bin/bash
+          VERMAGIC="$1"
+          KERNEL_DIR="$2"
 
-if [ ! -z "$VERMAGIC" ] && [ -d "$KERNEL_DIR" ]; then
-    # Находим и модифицируем файлы, отвечающие за vermagic
-    find "$KERNEL_DIR" -name "Makefile" -path "*/linux-*" | while read makefile; do
-        if grep -q "KERNELRELEASE" "$makefile"; then
-            echo "Patching $makefile for vermagic: $VERMAGIC"
-            # Создаем бэкап
-            cp "$makefile" "$makefile.orig"
-            # Модифицируем EXTRAVERSION
-            sed -i "s/^EXTRAVERSION.*/EXTRAVERSION = -${VERMAGIC##*-}/" "$makefile"
-        fi
-    done
-    
-    # Также пытаемся модифицировать version.h если он существует
-    find "$KERNEL_DIR" -name "version.h" | while read version_h; do
-        if [ -w "$version_h" ]; then
-            echo "Patching $version_h"
-            sed -i "s/#define UTS_RELEASE.*/#define UTS_RELEASE \"$VERMAGIC\"/" "$version_h"
-        fi
-    done
-fi
-EOF
+          if [ ! -z "$VERMAGIC" ] && [ -d "$KERNEL_DIR" ]; then
+              # Находим и модифицируем файлы, отвечающие за vermagic
+              find "$KERNEL_DIR" -name "Makefile" -path "*/linux-*" | while read makefile; do
+                  if grep -q "KERNELRELEASE" "$makefile"; then
+                      echo "Patching $makefile for vermagic: $VERMAGIC"
+                      # Создаем бэкап
+                      cp "$makefile" "$makefile.orig"
+                      # Модифицируем EXTRAVERSION
+                      sed -i "s/^EXTRAVERSION.*/EXTRAVERSION = -${VERMAGIC##*-}/" "$makefile"
+                  fi
+              done
+              
+              # Также пытаемся модифицировать version.h если он существует
+              find "$KERNEL_DIR" -name "version.h" | while read version_h; do
+                  if [ -w "$version_h" ]; then
+                      echo "Patching $version_h"
+                      sed -i "s/#define UTS_RELEASE.*/#define UTS_RELEASE \"$VERMAGIC\"/" "$version_h"
+                  fi
+              done
+          fi
+          EOFSCRIPT
             chmod +x vermagic_patch.sh
             
             # Применяем патч ко всем найденным kernel директориям
