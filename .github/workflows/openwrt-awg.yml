@@ -68,10 +68,8 @@ jobs:
           echo "=== Force replace vermagic ==="
           VERMAGIC=${{ matrix.build_env.vermagic }}
           echo "Setting custom vermagic: $VERMAGIC"
-          cat > include/kernel-abiversion.mk <<EOF
-# Overridden by CI
-LINUX_RELEASE:=$VERMAGIC
-EOF
+          # безопасная замена через echo
+          echo -e "# Overridden by CI\nLINUX_RELEASE:=$VERMAGIC" > include/kernel-abiversion.mk
           cat include/kernel-abiversion.mk
 
           echo "=== Stage 3: compile kernel ==="
