@@ -1,4 +1,4 @@
-name: Create Release Mediatek Filogic
+name: Create Release Mediatek Filogic (force vermagic + ensure sources)
 
 on:
   push:
@@ -9,6 +9,7 @@ jobs:
   build:
     name: "v${{ matrix.tag }} - ${{ matrix.build_env.pkgarch}} :: ${{ matrix.build_env.target}}/${{ matrix.build_env.subtarget}} build"
     runs-on: ubuntu-latest
+
     strategy:
       matrix:
         tag: ['24.10.2']
@@ -19,80 +20,233 @@ jobs:
             vermagic: 2ccac7a75355327cb6dfb4df1ecb575e
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout OpenWrt
+        uses: actions/checkout@v4
         with:
           repository: openwrt/openwrt
           ref: v${{ matrix.tag }}
           fetch-depth: 0
 
-      - name: Install deps + ccache
+      - name: Show matrix
         run: |
-          sudo apt-get update
-          sudo apt-get install -y ccache
+          echo "TAG=${{ matrix.tag }}"
+          echo "PKGARCH=${{ matrix.build_env.pkgarch }}"
+          echo "TARGET=${{ matrix.build_env.target }}"
+          echo "SUBTARGET=${{ matrix.build_env.subtarget }}"
+          echo "REQUESTED_HASH=${{ matrix.build_env.vermagic }}"
 
-      - name: Setup cache
-        uses: actions/cache@v4
-        with:
-          path: |
-            dl
-            staging_dir
-            .ccache
-          key: ${{ runner.os }}-openwrt-${{ matrix.tag }}-${{ matrix.build_env.pkgarch }}
-
-      - name: Update and install feeds
+      - name: Update feeds and ensure package sources (add awgopenwrt feed or clone fallback)
         run: |
-          pkgarch=${{ matrix.build_env.pkgarch }}
-          target=${{ matrix.build_env.target }}
-          subtarget=${{ matrix.build_env.subtarget }}
+          set -euo pipefail
 
-          echo "src-git awgopenwrt https://github.com/gargullia/awg-openwrt.git" > feeds.conf
+          # Ensure feeds.conf exists (use feeds.conf.default as basis if available)
+          if [ ! -f feeds.conf ]; then
+            if [ -f feeds.conf.default ]; then
+              cp feeds.conf.default feeds.conf
+            else
+              touch feeds.conf
+            fi
+          fi
+
+          # Add custom feed if not already present
+          if ! grep -q '^src-git awgopenwrt ' feeds.conf 2>/dev/null; then
+            echo "Adding awgopenwrt feed to feeds.conf"
+            echo "src-git awgopenwrt https://github.com/gargullia/awg-openwrt.git" >> feeds.conf
+          else
+            echo "awgopenwrt feed already present in feeds.conf"
+          fi
+
+          # Update & install feeds
           ./scripts/feeds update -a
           ./scripts/feeds install -a
 
-          wget https://downloads.openwrt.org/releases/${{ matrix.tag }}/targets/${target}/${subtarget}/config.buildinfo -O .config
+          # Quick verification — look for amnezia package in package/ or feeds
+          echo "Searching for amnezia package after feeds update..."
+          if ! grep -R --line-number "amnezia" package feeds 2>/dev/null | head -n1 >/dev/null; then
+            echo "Package amnezia not found via feeds. Falling back to cloning awg-openwrt into package/awgopenwrt"
+            rm -rf package/awgopenwrt || true
+            git clone --depth 1 https://github.com/gargullia/awg-openwrt.git package/awgopenwrt
+            echo "Cloned awg-openwrt into package/awgopenwrt"
+            # re-run install (ensure Make sees it)
+            ./scripts/feeds install -a || true
+          else
+            echo "Found amnezia package in feeds or package directory"
+          fi
+
+          echo "Listing package directory:"
+          ls -la package || true
+          echo "Grep for amnezia files:"
+          grep -R --line-number "amnezia" package || true
+
+      - name: Get base .config and ensure packages selected
+        run: |
+          set -euo pipefail
+          # Download the official release base config (keeps target defaults)
+          wget -q https://downloads.openwrt.org/releases/${{ matrix.tag }}/targets/${{ matrix.build_env.target}}/${{ matrix.build_env.subtarget}}/config.buildinfo -O .config
+          make defconfig
+          # ensure our packages are enabled
           echo "CONFIG_PACKAGE_kmod-amneziawg=m" >> .config
           echo "CONFIG_PACKAGE_amneziawg-tools=y" >> .config
           echo "CONFIG_PACKAGE_luci-proto-amneziawg=y" >> .config
-          echo "CONFIG_DEVEL=y" >> .config
-          echo "CONFIG_CCACHE=y" >> .config
           make defconfig
 
-      - name: Patch vermagic
+      - name: Build tools & toolchain
         run: |
-          VERMAGIC=${{ matrix.build_env.vermagic }}
-          echo "Forcing vermagic: $VERMAGIC"
-          sed -i "s/^LINUX_RELEASE:=.*/LINUX_RELEASE:=$VERMAGIC/" include/kernel.mk
-          echo "$VERMAGIC" > include/kernel-abiversion.mk
-
-      - name: Build kernel + needed packages only
-        run: |
+          set -euo pipefail
           export FORCE_UNSAFE_CONFIGURE=1
-          make tools/install -j$(nproc)
-          make toolchain/install -j$(nproc)
-          make target/linux/compile -j$(nproc)
-          make package/amneziawg-tools/compile V=s -j$(nproc)
-          make package/kmod-amneziawg/compile V=s -j$(nproc)
-          make package/luci-proto-amneziawg/compile V=s -j$(nproc)
+          make tools/install -i -j$(nproc)
+          make toolchain/install -i -j$(nproc)
 
-      - name: Collect artifacts
+      - name: Prepare kernel (generate include files)
         run: |
-          tag_name=${{ github.ref_name }}
+          set -euo pipefail
+          make target/linux/prepare -j$(nproc) V=sc
+
+      - name: Detect LINUX_VERSION and current ABI (debug)
+        id: detect
+        run: |
+          set -euo pipefail
+          if [ -f include/kernel-version.mk ]; then
+            LINUX_VERSION=$(grep -E '^LINUX_VERSION[:=]' include/kernel-version.mk | sed -E 's/.*[:=]//; s/ //g' || true)
+          elif [ -f include/kernel-abiversion.mk ]; then
+            LINUX_VERSION=$(grep -E '^LINUX_VERSION[:=]' include/kernel-abiversion.mk | sed -E 's/.*[:=]//; s/ //g' || true)
+          else
+            LINUX_VERSION=$(make -s kernelversion || true)
+          fi
+          CUR_RELEASE=$(grep -E '^LINUX_RELEASE[:=]' include/kernel-abiversion.mk 2>/dev/null | sed -E 's/.*[:=]//; s/ //g' || true)
+          echo "LINUX_VERSION=${LINUX_VERSION}" >> $GITHUB_OUTPUT
+          echo "CUR_RELEASE=${CUR_RELEASE}" >> $GITHUB_OUTPUT
+          echo "Detected LINUX_VERSION='${LINUX_VERSION}', current LINUX_RELEASE='${CUR_RELEASE}'"
+          cat include/kernel-version.mk 2>/dev/null || true
+          cat include/kernel-abiversion.mk 2>/dev/null || true
+
+      - name: Force-set LINUX_RELEASE (vermagic) and rebuild kernel
+        run: |
+          set -euo pipefail
+          REQ_HASH="${{ matrix.build_env.vermagic }}"
+          NEW_RELEASE="${REQ_HASH}-r1"
+          LINUX_VERSION="${{ steps.detect.outputs.LINUX_VERSION }}"
+          if [ -z "${LINUX_VERSION}" ]; then
+            echo "::error::Cannot detect LINUX_VERSION; aborting."
+            exit 1
+          fi
+
+          echo "Setting LINUX_VERSION: ${LINUX_VERSION}"
+          echo "Setting NEW_RELEASE (LINUX_RELEASE): ${NEW_RELEASE}"
+
+          # Overwrite abiversion include used by packaging
+          echo "LINUX_VERSION:=${LINUX_VERSION}" > include/kernel-abiversion.mk
+          echo "LINUX_RELEASE:=${NEW_RELEASE}" >> include/kernel-abiversion.mk
+          cat include/kernel-abiversion.mk
+
+          # Export for make
+          export LINUX_VERSION
+          export LINUX_RELEASE="${NEW_RELEASE}"
+
+          # Clean & rebuild kernel so modules get new vermagic
+          make target/linux/clean
+          make target/linux/prepare -j$(nproc) V=sc
+          make target/linux/compile -j$(nproc) V=sc
+
+          # Overwrite .vermagic files as a safety net
+          find build_dir/ -type f -name ".vermagic" -print -exec sh -c "echo ${LINUX_VERSION}~${NEW_RELEASE} > {}" \;
+
+          # show some .vermagic files
+          find build_dir/ -type f -name ".vermagic" -exec sh -c "echo '--- {} ---'; cat {}" \;
+
+      - name: Compile packages (modules) - amnezia
+        run: |
+          set -euo pipefail
+          make defconfig
+          make -j1 V=sc package/amneziawg-tools/{clean,download,prepare,compile}
+          make -j1 V=sc package/kmod-amneziawg/{clean,download,prepare,compile}
+          make -j1 V=sc package/luci-proto-amneziawg/{clean,download,prepare,compile}
+
+      - name: Inspect built .ko vermagic (debug)
+        run: |
+          set -euo pipefail
+          TARGET=${{ matrix.build_env.target }}
+          SUB=${{ matrix.build_env.subtarget }}
+          for ipk in $(find bin/targets/${TARGET}/${SUB}/packages -name 'kmod-amneziawg*.ipk' 2>/dev/null); do
+            echo "==== IPK: ${ipk} ===="
+            mkdir -p tmpipk && cd tmpipk
+            ar x ../"${ipk}"
+            DATA_TAR=$(ls data.tar.* 2>/dev/null | head -n1 || true)
+            if [ -n "${DATA_TAR}" ]; then
+              tar -xf "${DATA_TAR}"
+              KO=$(find . -name '*.ko' | head -n1 || true)
+              if [ -n "${KO}" ]; then
+                echo "Found module: ${KO}"
+                strings "${KO}" | grep -Ei "vermagic|${{ steps.detect.outputs.LINUX_VERSION }}|${{ matrix.build_env.vermagic }}" || true
+              else
+                echo "No .ko found inside ipk."
+              fi
+            else
+              echo "data.tar.* not found in ipk"
+            fi
+            cd .. && rm -rf tmpipk
+          done
+
+      - name: Patch ipk control Depends to requested kernel ABI
+        run: |
+          set -euo pipefail
+          TARGET=${{ matrix.build_env.target }}
+          SUB=${{ matrix.build_env.subtarget }}
+          REQ_HASH="${{ matrix.build_env.vermagic }}"
+          LINUX_VERSION="${{ steps.detect.outputs.LINUX_VERSION }}"
+          NEW_RELEASE="${REQ_HASH}-r1"
+          DEP_STR="${LINUX_VERSION}~${NEW_RELEASE}"
+          echo "Will set control Depends: kernel (= ${DEP_STR})"
+
+          for ipk in $(find bin/targets/${TARGET}/${SUB}/packages -name 'kmod-amneziawg*.ipk' 2>/dev/null); do
+            echo "Patching $ipk"
+            mkdir -p tmpipk && cd tmpipk
+            ar x ../"${ipk}"
+            tar -xf control.tar.* || true
+            if [ -f control ]; then
+              if grep -q '^Depends:' control; then
+                sed -E -i "s/^(Depends:.*)/Depends: kernel (= ${DEP_STR})/" control || true
+                if ! grep -q 'Depends: kernel' control; then
+                  sed -i "1s/^/Depends: kernel (= ${DEP_STR})\n/" control
+                fi
+              else
+                echo "Depends: kernel (= ${DEP_STR})" >> control
+              fi
+              tar -czf control.tar.gz control
+              mv ../"${ipk}" ../"${ipk}".orig || true
+              ar r ../"${ipk}" debian-binary control.tar.gz data.tar.* || true
+              echo "Patched control inside $ipk"
+            else
+              echo "control file not found, skipping patch for $ipk"
+            fi
+            cd .. && rm -rf tmpipk
+          done
+
+      - name: Prepare artifacts for release
+        run: |
+          set -euo pipefail
           mkdir -p awgrelease
-          postfix="${tag_name}_v${{ matrix.tag }}_${{ matrix.build_env.pkgarch}}_${{ matrix.build_env.target}}_${{ matrix.build_env.subtarget}}"
-
-          cp bin/packages/${{ matrix.build_env.pkgarch }}/awgopenwrt/amneziawg-tools_*.ipk awgrelease/amneziawg-tools_${postfix}.ipk
-          cp bin/targets/${{ matrix.build_env.target}}/${{ matrix.build_env.subtarget}}/packages/kmod-amneziawg_*.ipk awgrelease/kmod-amneziawg_${postfix}.ipk
-          cp bin/packages/${{ matrix.build_env.pkgarch }}/awgopenwrt/luci-proto-amneziawg_*.ipk awgrelease/luci-proto-amneziawg_${postfix}.ipk
-
-          echo "Actual vermagic:" > awgrelease/vermagic.txt
-          cat build_dir/target-*/linux-*/.vermagic >> awgrelease/vermagic.txt
+          TAGNAME="${{ github.ref_name }}"
+          PKGARCH=${{ matrix.build_env.pkgarch }}
+          TARGET=${{ matrix.build_env.target }}
+          SUB=${{ matrix.build_env.subtarget }}
+          POSTFIX="${TAGNAME}_v${{ matrix.tag }}_${PKGARCH}_${TARGET}_${SUB}"
+          cp bin/packages/${PKGARCH}/awgopenwrt/amneziawg-tools_*.ipk "awgrelease/amneziawg-tools_${POSTFIX}.ipk" || true
+          cp bin/targets/${TARGET}/${SUB}/packages/kmod-amneziawg_*.ipk "awgrelease/kmod-amneziawg_${POSTFIX}.ipk" || true
+          cp bin/packages/${PKGARCH}/awgopenwrt/luci-proto-amneziawg_*.ipk "awgrelease/luci-proto-amneziawg_${POSTFIX}.ipk" || true
+          ls -la awgrelease || true
 
       - name: Release
         uses: softprops/action-gh-release@v1
         with:
-          files: awgrelease/*
-          body_path: awgrelease/vermagic.txt
+          files: awgrelease/*.ipk
+          body: |
+            Custom OpenWrt ${{ matrix.tag }} build
+            Target: ${{ matrix.build_env.target }}/${{ matrix.build_env.subtarget }}
+            Arch: ${{ matrix.build_env.pkgarch }}
+            Requested hash: ${{ matrix.build_env.vermagic }}
+            Composed ABI (depends): ${{ steps.detect.outputs.LINUX_VERSION }}~${{ matrix.build_env.vermagic }}-r1
 
       - name: Cleanup
         run: |
-          rm -rf awgrelease feeds.conf
+          rm -rf awgrelease || true
