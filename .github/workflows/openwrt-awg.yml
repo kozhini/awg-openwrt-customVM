@@ -67,13 +67,12 @@ jobs:
 
           echo "=== Force replace vermagic ==="
           VERMAGIC=${{ matrix.build_env.vermagic }}
-          echo "Using custom vermagic: $VERMAGIC"
-          if grep -q '^LINUX_RELEASE:=' include/kernel-abiversion.mk; then
-            sed -i "s/^LINUX_RELEASE:=.*$/LINUX_RELEASE:=$VERMAGIC/" include/kernel-abiversion.mk
-          else
-            echo "LINUX_RELEASE:=$VERMAGIC" >> include/kernel-abiversion.mk
-          fi
-          grep LINUX_RELEASE include/kernel-abiversion.mk
+          echo "Setting custom vermagic: $VERMAGIC"
+          cat > include/kernel-abiversion.mk <<EOF
+# Overridden by CI
+LINUX_RELEASE:=$VERMAGIC
+EOF
+          cat include/kernel-abiversion.mk
 
           echo "=== Stage 3: compile kernel ==="
           make target/linux/compile -i -j$(nproc) V=sc
@@ -97,6 +96,11 @@ jobs:
         uses: softprops/action-gh-release@v1
         with:
           files: awgrelease/*.ipk
+          body: |
+            📦 Release for OpenWrt v${{ matrix.tag }}
+            🎯 Target: ${{ matrix.build_env.target }}/${{ matrix.build_env.subtarget }}
+            🏗️ Arch: ${{ matrix.build_env.pkgarch }}
+            🔑 vermagic: `${{ matrix.build_env.vermagic }}`
 
       - name: Cleanup
         run: |
