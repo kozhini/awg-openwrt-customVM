@@ -26,12 +26,11 @@ jobs:
 
       - name: Update and install feeds
         run: |
-          pkgarch=${{ matrix.build_env.pkgarch}}
-          target=${{ matrix.build_env.target}}
-          subtarget=${{ matrix.build_env.subtarget}}
-          vermagic=${{ matrix.build_env.vermagic }}
+          pkgarch=${{ matrix.build_env.pkgarch }}
+          target=${{ matrix.build_env.target }}
+          subtarget=${{ matrix.build_env.subtarget }}
 
-          echo "pkgarch: ${pkgarch}, target: ${target}, subtarget: ${subtarget}, vermagic: ${vermagic}"
+          echo "pkgarch: ${pkgarch}, target: ${target}, subtarget: ${subtarget}"
 
           rm -rf bin/packages/${pkgarch}/awgopenwrt/ || true
           rm -rf bin/targets/${target}/${subtarget}/packages/  || true
@@ -45,19 +44,12 @@ jobs:
           wget https://downloads.openwrt.org/releases/${{ matrix.tag }}/targets/${target}/${subtarget}/config.buildinfo -O .config
           make defconfig
 
-      - name: Make Kernel and World with fixed vermagic
+      - name: Make Kernel Compile with custom vermagic
         run: |
           export FORCE_UNSAFE_CONFIGURE=1
-
-          # Настройка пакетов
           echo "CONFIG_PACKAGE_kmod-amneziawg=m" >> .config
           echo "CONFIG_PACKAGE_amneziawg-tools=y" >> .config
           echo "CONFIG_PACKAGE_luci-proto-amneziawg=y" >> .config
-
-          # Фиксированный vermagic из матрицы
-          echo "CONFIG_KERNEL_BUILD_USER=\"runner\"" >> .config
-          echo "CONFIG_KERNEL_BUILD_DOMAIN=\"github\"" >> .config
-          echo "CONFIG_KERNEL_VERMAGIC=\"${vermagic}\"" >> .config
 
           if [[ $(uname -m) == "aarch64" ]]; then
             echo 'CONFIG_GOLANG_EXTERNAL_BOOTSTRAP_ROOT="/usr/local/go/bin/go"' >> .config
@@ -66,15 +58,27 @@ jobs:
 
           make defconfig
 
-          # Установка инструментов
-          make tools/install -i -j $(nproc)
-          make toolchain/install -i -j $(nproc)
+          echo "=== Stage 1: build tools & toolchain ==="
+          make tools/install -i -j$(nproc)
+          make toolchain/install -i -j$(nproc)
 
-          # Сборка ядра с нужным vermagic
-          make target/linux/prepare -j $(nproc) V=sc
-          make target/linux/compile -i -j $(nproc)
+          echo "=== Stage 2: prepare kernel ==="
+          make target/linux/prepare -j$(nproc) V=sc
 
-      - name: Build ipks
+          echo "=== Force replace vermagic ==="
+          VERMAGIC=${{ matrix.build_env.vermagic }}
+          echo "Using custom vermagic: $VERMAGIC"
+          if grep -q '^LINUX_RELEASE:=' include/kernel-abiversion.mk; then
+            sed -i "s/^LINUX_RELEASE:=.*$/LINUX_RELEASE:=$VERMAGIC/" include/kernel-abiversion.mk
+          else
+            echo "LINUX_RELEASE:=$VERMAGIC" >> include/kernel-abiversion.mk
+          fi
+          grep LINUX_RELEASE include/kernel-abiversion.mk
+
+          echo "=== Stage 3: compile kernel ==="
+          make target/linux/compile -i -j$(nproc) V=sc
+
+      - name: Make ipks amnezia_${{ github.ref_name }}
         run: |
           make -j1 V=sc package/amneziawg-tools/{clean,download,prepare,compile}
           make -j1 V=sc package/kmod-amneziawg/{clean,download,prepare,compile}
