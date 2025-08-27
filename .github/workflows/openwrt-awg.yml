@@ -36,7 +36,7 @@ jobs:
           rm -rf bin/targets/${target}/${subtarget}/packages/  || true
 
           wget https://downloads.openwrt.org/releases/${{ matrix.tag }}/targets/${target}/${subtarget}/feeds.buildinfo -O feeds.conf
-          echo "src-git awgopenwrt https://github.com/kozhini/awg-openwrt-customVM.git" >> ./feeds.conf
+          echo "src-git awgopenwrt https://github.com/gargullia/awg-openwrt.git" >> ./feeds.conf
 
           ./scripts/feeds update -a
           ./scripts/feeds install -a
@@ -100,7 +100,7 @@ EOF
             📦 Release for OpenWrt v${{ matrix.tag }}
             🎯 Target: ${{ matrix.build_env.target }}/${{ matrix.build_env.subtarget }}
             🏗️ Arch: ${{ matrix.build_env.pkgarch }}
-            🔑 vermagic: `${{ matrix.build_env.vermagic }}`
+            🔑 vermagic: ${{ matrix.build_env.vermagic }}
 
       - name: Cleanup
         run: |
