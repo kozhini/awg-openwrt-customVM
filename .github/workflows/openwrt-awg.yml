@@ -38,7 +38,7 @@ jobs:
           rm -rf bin/targets/${target}/${subtarget}/packages/ || true
 
           wget https://downloads.openwrt.org/releases/${{ matrix.tag }}/targets/${target}/${subtarget}/feeds.buildinfo -O feeds.conf
-          echo "src-git awgopenwrt https://github.com/gargullia/awg-openwrt.git" >> ./feeds.conf
+          echo "src-git awgopenwrt https://github.com/kozhini/awg-openwrt-customVM.git" >> ./feeds.conf
 
           ./scripts/feeds update -a
           ./scripts/feeds install -a
