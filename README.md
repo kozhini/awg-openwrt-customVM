@@ -1,7 +1,7 @@
 Amnezia 1.5 ipk's files for OpenWRT-24.10.2 Released Mediatek Filogic
 
 Check kernel information befor compilating
-by "opkg info kernel" and edit env matrix
+by "opkg info kernel" and edit env matrix in "openwrt-awg.yml" file
 
     strategy:
       matrix:
